@@ -180,7 +180,7 @@ fn send_player_input(
 ) {
     let dash = keys.just_pressed(KeyCode::Space);
 
-    // Server expects normalized 8-way input.
+    // Server expects discrete 8-directional input plus idle (9 states).
     let x = input_state.move_dir.x.clamp(-1.0, 1.0).round() as i8;
     let y = input_state.move_dir.y.clamp(-1.0, 1.0).round() as i8;
 
