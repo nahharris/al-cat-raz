@@ -1,0 +1,10 @@
+Item(
+    id: "can_suit",
+    name: "Can Suit",
+    description: "A suit of armor made of cans that can be used to protect against enemies.",
+    components: [
+        Equipable(slot: Body),
+        Armor(defense: 10),
+        Damageable(durability: 50),
+    ],
+)

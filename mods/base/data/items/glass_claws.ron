@@ -1,0 +1,10 @@
+Item(
+    id: "glass_claws",
+    name: "Glass Claws",
+    description: "A pair of claws made of glass that can be used to attack enemies.",
+    components: [
+        Equipable(slot: Feet),
+        Weapon(damage: 4, cooldown: 0.1),
+        Damageable(durability: 50),
+    ],
+)

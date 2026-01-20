@@ -1,0 +1,11 @@
+Item(
+    id: "rusty_nail_claws",
+    name: "Rusty Nail Claws",
+    description: "A pair of claws made of old rusty nails that can be used to attack enemies.",
+    components: [
+        Equipable(slot: Feet),
+        Weapon(damage: 2, cooldown: 0.2),
+        Damageable(durability: 50),
+        GadgetHost(slot: Edge, count: 1),
+    ],
+)

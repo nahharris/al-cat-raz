@@ -1,0 +1,15 @@
+Item(
+    id: "glass_shard",
+    name: "Glass Shard",
+    description: "A sharp piece of glass that can be used in recipes or to make weapons sharper.",
+    components: [
+        Stackable(max: 50),
+        Gadget(
+            slot: Edge,
+            modifiers: [
+                StatModifier(stat: Damage, factor: 1.5),
+                StatModifier(stat: Cooldown, factor: 1.1),
+            ],
+        ),
+    ],
+)

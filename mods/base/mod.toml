@@ -1,0 +1,6 @@
+mod_id = "base"
+name = "Al-cat-raz Base Content"
+version = "0.1.0"
+mod_api_version = 1
+description = "Baseline items/recipes used by the core game."
+authors = ["Hannah <hannah@harrisonn.dev>"]
