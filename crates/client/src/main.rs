@@ -1,4 +1,7 @@
-use std::{net::UdpSocket, time::SystemTime};
+use std::{
+    net::UdpSocket,
+    time::{Duration, SystemTime},
+};
 
 use anyhow::Result;
 use bevy::camera::Viewport;
@@ -17,6 +20,8 @@ const VIRTUAL_WIDTH: f32 = 320.0;
 const VIRTUAL_HEIGHT: f32 = 180.0;
 // Scale the 8x8 cat sprite for readability.
 const SPRITE_SCALE: f32 = 2.0;
+// Reduce input bandwidth when idle while keeping movement responsive.
+const INPUT_SEND_INTERVAL_SECS: f32 = 0.25;
 
 #[derive(Parser, Debug, Clone, Resource)]
 struct Args {
@@ -46,6 +51,13 @@ struct CameraVirtualResolution {
 struct LocalInputState {
     move_dir: Vec2,
     sprint: bool,
+    dash_pressed: bool,
+}
+
+#[derive(Resource)]
+struct InputSendState {
+    last_sent: PlayerInputCommand,
+    time_since_send: Timer,
 }
 
 fn main() -> Result<()> {
@@ -61,6 +73,18 @@ fn main() -> Result<()> {
     app.insert_resource(LocalInputState {
         move_dir: Vec2::ZERO,
         sprint: false,
+        dash_pressed: false,
+    });
+    let mut send_timer = Timer::from_seconds(INPUT_SEND_INTERVAL_SECS, TimerMode::Repeating);
+    send_timer.tick(Duration::from_secs_f32(INPUT_SEND_INTERVAL_SECS));
+    app.insert_resource(InputSendState {
+        last_sent: PlayerInputCommand {
+            x: 0,
+            y: 0,
+            sprint: false,
+            dash: false,
+        },
+        time_since_send: send_timer,
     });
 
     app.add_plugins((
@@ -171,25 +195,35 @@ fn capture_player_input(keys: Res<ButtonInput<KeyCode>>, mut input_state: ResMut
 
     input_state.move_dir = move_dir;
     input_state.sprint = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+    input_state.dash_pressed = keys.just_pressed(KeyCode::Space);
 }
 
 fn send_player_input(
-    keys: Res<ButtonInput<KeyCode>>,
+    time: Res<Time>,
     input_state: Res<LocalInputState>,
+    mut send_state: ResMut<InputSendState>,
     mut input_writer: MessageWriter<PlayerInputCommand>,
 ) {
-    let dash = keys.just_pressed(KeyCode::Space);
-
     // Server expects discrete 8-directional input plus idle (9 states).
-    let x = input_state.move_dir.x.clamp(-1.0, 1.0).round() as i8;
-    let y = input_state.move_dir.y.clamp(-1.0, 1.0).round() as i8;
-
-    input_writer.write(PlayerInputCommand {
-        x,
-        y,
+    let command = PlayerInputCommand {
+        x: input_state.move_dir.x.clamp(-1.0, 1.0).round() as i8,
+        y: input_state.move_dir.y.clamp(-1.0, 1.0).round() as i8,
         sprint: input_state.sprint,
-        dash,
-    });
+        dash: input_state.dash_pressed,
+    };
+
+    send_state.time_since_send.tick(time.delta());
+    let input_changed = command != send_state.last_sent;
+    let force_send = command.dash;
+    let ready_to_send = input_changed || send_state.time_since_send.is_finished();
+
+    if ready_to_send || force_send {
+        input_writer.write(command);
+        send_state.last_sent = command;
+        if send_state.time_since_send.is_finished() || input_changed {
+            send_state.time_since_send.reset();
+        }
+    }
 }
 
 fn attach_sprite_to_replicated_entities(

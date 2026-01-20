@@ -17,7 +17,7 @@ pub struct Player {
     pub network_id: u64,
 }
 
-#[derive(Message, Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Message, Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct PlayerInputCommand {
     pub x: i8,
     pub y: i8,
