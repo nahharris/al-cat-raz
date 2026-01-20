@@ -255,11 +255,11 @@ fn apply_player_movement(
 
         if base_dir.length_squared() > 0.0 {
             let mut speed = BASE_MOVE_SPEED;
-            if input.sprint {
-                speed *= SPRINT_MULTIPLIER;
-            }
             if dash_active {
+                // When dashing, dash speed overrides sprint speed to avoid stacking multipliers.
                 speed *= DASH_SPEED_MULTIPLIER;
+            } else if input.sprint {
+                speed *= SPRINT_MULTIPLIER;
             }
 
             transform.x += base_dir.x * speed * delta;
