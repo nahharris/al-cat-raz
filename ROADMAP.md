@@ -21,7 +21,7 @@ This document outlines the development milestones for **Al-cat-raz**, a top-down
 
 ### M1: Vertical Slice — Survival Loop
 **Goal**: Implement the core gameplay loop in a singleplayer context.
-- [ ] Character movement and top-down camera.
+- [x] Character movement and top-down camera (basic input-driven movement + pixel-perfect follow camera).
 - [ ] LDtk level loading integration (`bevy_ecs_ldtk`).
 - [ ] Loot system (scavenging piles, containers).
 - [ ] Noise system (actions produce sound events).
