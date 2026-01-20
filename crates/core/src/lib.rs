@@ -10,8 +10,23 @@ pub struct NetTransform {
     pub y: f32,
 }
 
+#[derive(Component, Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct Player {
+    /// Renet client ID used to identify the local player on clients.
+    /// This should match the network ID assigned to the connection on the server.
+    pub network_id: u64,
+}
+
+#[derive(Message, Clone, Copy, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PlayerInputCommand {
+    pub x: i8,
+    pub y: i8,
+    pub sprint: bool,
+    pub dash: bool,
+}
+
 pub fn register_replication(app: &mut App) {
-    // Replicate a tiny, explicit component to keep the hello world simple.
-    // Rendering will read this and drive a visual Transform client-side.
+    // Keep replication explicit and small: server sends transforms + player identity only.
     app.replicate::<NetTransform>();
+    app.replicate::<Player>();
 }

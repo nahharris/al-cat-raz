@@ -8,6 +8,7 @@ members = [
 resolver = "2"
 
 [workspace.package]
+
 edition = "2024"
 license = "MIT OR Apache-2.0"
 repository = "https://example.com/al-cat-raz"
@@ -19,6 +20,7 @@ bevy = { version = "0.17.3" }
 
 # Networking
 bevy_replicon = { version = "0.37" }
+
 bevy_replicon_renet = { version = "0.13.0" }
 
 # Maps

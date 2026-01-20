@@ -12,3 +12,6 @@ clap.workspace = true
 anyhow.workspace = true
 
 core = { path = "../core" }
+
+[lints.clippy]
+type_complexity = "allow"

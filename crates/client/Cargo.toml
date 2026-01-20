@@ -11,5 +11,7 @@ bevy_replicon_renet.workspace = true
 clap.workspace = true
 fastrand.workspace = true
 anyhow.workspace = true
-
 core = { path = "../core" }
+
+[lints.clippy]
+type_complexity = "allow"

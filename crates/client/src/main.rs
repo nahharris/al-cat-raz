@@ -1,7 +1,11 @@
-use std::{net::UdpSocket, time::SystemTime};
+use std::{
+    net::UdpSocket,
+    time::{Duration, SystemTime},
+};
 
 use anyhow::Result;
-use bevy::prelude::*;
+use bevy::camera::Viewport;
+use bevy::{camera::ScalingMode, prelude::*, window::WindowResolution};
 use bevy_replicon::prelude::*;
 use bevy_replicon_renet::{
     RenetChannelsExt, RepliconRenetPlugins,
@@ -9,12 +13,51 @@ use bevy_replicon_renet::{
     renet::{ConnectionConfig, RenetClient},
 };
 use clap::Parser;
-use core::{NetTransform, PROTOCOL_ID, register_replication};
+use core::{NetTransform, PROTOCOL_ID, Player, PlayerInputCommand, register_replication};
+
+// Virtual resolution for pixel art. Adjust to change the visible world.
+const VIRTUAL_WIDTH: f32 = 320.0;
+const VIRTUAL_HEIGHT: f32 = 180.0;
+// Scale the 8x8 cat sprite for readability.
+const SPRITE_SCALE: f32 = 2.0;
+// Reduce input bandwidth when idle while keeping movement responsive.
+const INPUT_SEND_INTERVAL_SECS: f32 = 0.25;
 
 #[derive(Parser, Debug, Clone, Resource)]
 struct Args {
     #[arg(long, default_value = "127.0.0.1:5000")]
     server: String,
+}
+
+#[derive(Resource)]
+struct LocalClientId(u64);
+
+#[derive(Component)]
+struct NetEntityVisual;
+
+#[derive(Component)]
+struct LocalPlayer;
+
+#[derive(Component)]
+struct FollowCamera;
+
+#[derive(Resource)]
+struct CameraVirtualResolution {
+    width: f32,
+    height: f32,
+}
+
+#[derive(Resource)]
+struct LocalInputState {
+    move_dir: Vec2,
+    sprint: bool,
+    dash_pressed: bool,
+}
+
+#[derive(Resource)]
+struct InputSendState {
+    last_sent: PlayerInputCommand,
+    time_since_send: Timer,
 }
 
 fn main() -> Result<()> {
@@ -23,16 +66,61 @@ fn main() -> Result<()> {
     let mut app = App::new();
     app.insert_resource(args);
 
-    app.add_plugins((DefaultPlugins, RepliconPlugins, RepliconRenetPlugins));
+    app.insert_resource(CameraVirtualResolution {
+        width: VIRTUAL_WIDTH,
+        height: VIRTUAL_HEIGHT,
+    });
+    app.insert_resource(LocalInputState {
+        move_dir: Vec2::ZERO,
+        sprint: false,
+        dash_pressed: false,
+    });
+    let mut send_timer = Timer::from_seconds(INPUT_SEND_INTERVAL_SECS, TimerMode::Repeating);
+    send_timer.tick(Duration::from_secs_f32(INPUT_SEND_INTERVAL_SECS));
+    app.insert_resource(InputSendState {
+        last_sent: PlayerInputCommand {
+            x: 0,
+            y: 0,
+            sprint: false,
+            dash: false,
+        },
+        time_since_send: send_timer,
+    });
 
+    app.add_plugins((
+        DefaultPlugins
+            .set(ImagePlugin::default_nearest())
+            .set(WindowPlugin {
+                primary_window: Some(Window {
+                    title: "Al-cat-raz".to_string(),
+                    resolution: WindowResolution::new(
+                        (VIRTUAL_WIDTH as u32) * 4,
+                        (VIRTUAL_HEIGHT as u32) * 4,
+                    )
+                    .with_scale_factor_override(1.0),
+
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }),
+        RepliconPlugins,
+        RepliconRenetPlugins,
+    ));
     register_replication(&mut app);
+    // Inputs are latency-sensitive; unordered delivery is fine for this prototype.
+    app.add_client_message::<PlayerInputCommand>(Channel::Unordered);
 
     app.add_systems(Startup, (setup_scene, init_client));
     app.add_systems(
         Update,
         (
+            capture_player_input,
+            send_player_input,
             attach_sprite_to_replicated_entities,
             sync_visual_transform_from_net,
+            tag_local_player,
+            update_camera_follow,
+            update_camera_viewport,
             log_client_state,
         ),
     );
@@ -41,8 +129,20 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn setup_scene(mut commands: Commands) {
-    commands.spawn(Camera2d::default());
+fn setup_scene(mut commands: Commands, virtual_resolution: Res<CameraVirtualResolution>) {
+    let projection = OrthographicProjection {
+        scaling_mode: ScalingMode::Fixed {
+            width: virtual_resolution.width,
+            height: virtual_resolution.height,
+        },
+        ..OrthographicProjection::default_2d()
+    };
+
+    // The viewport will be letterboxed to preserve pixel-perfect scaling.
+    commands
+        .spawn(Camera2d)
+        .insert(Projection::Orthographic(projection))
+        .insert(FollowCamera);
 }
 
 fn init_client(mut commands: Commands, args: Res<Args>, channels: Res<RepliconChannels>) {
@@ -73,15 +173,62 @@ fn init_client(mut commands: Commands, args: Res<Args>, channels: Res<RepliconCh
     let transport = NetcodeClientTransport::new(now, authentication, socket)
         .expect("failed to create NetcodeClientTransport");
 
+    commands.insert_resource(LocalClientId(client_id));
     commands.insert_resource(client);
     commands.insert_resource(transport);
 }
 
-#[derive(Component)]
-struct NetEntityVisual;
+fn capture_player_input(keys: Res<ButtonInput<KeyCode>>, mut input_state: ResMut<LocalInputState>) {
+    let mut move_dir = Vec2::ZERO;
+    if keys.pressed(KeyCode::KeyW) || keys.pressed(KeyCode::ArrowUp) {
+        move_dir.y += 1.0;
+    }
+    if keys.pressed(KeyCode::KeyS) || keys.pressed(KeyCode::ArrowDown) {
+        move_dir.y -= 1.0;
+    }
+    if keys.pressed(KeyCode::KeyA) || keys.pressed(KeyCode::ArrowLeft) {
+        move_dir.x -= 1.0;
+    }
+    if keys.pressed(KeyCode::KeyD) || keys.pressed(KeyCode::ArrowRight) {
+        move_dir.x += 1.0;
+    }
+
+    input_state.move_dir = move_dir;
+    input_state.sprint = keys.pressed(KeyCode::ShiftLeft) || keys.pressed(KeyCode::ShiftRight);
+    input_state.dash_pressed = keys.just_pressed(KeyCode::Space);
+}
+
+fn send_player_input(
+    time: Res<Time>,
+    input_state: Res<LocalInputState>,
+    mut send_state: ResMut<InputSendState>,
+    mut input_writer: MessageWriter<PlayerInputCommand>,
+) {
+    // Server expects discrete 8-directional input plus idle (9 states).
+    let command = PlayerInputCommand {
+        x: input_state.move_dir.x.clamp(-1.0, 1.0).round() as i8,
+        y: input_state.move_dir.y.clamp(-1.0, 1.0).round() as i8,
+        sprint: input_state.sprint,
+        dash: input_state.dash_pressed,
+    };
+
+    send_state.time_since_send.tick(time.delta());
+    let input_changed = command != send_state.last_sent;
+    let force_send = command.dash;
+    let ready_to_send = input_changed || send_state.time_since_send.is_finished();
+
+    if ready_to_send || force_send {
+        input_writer.write(command);
+        send_state.last_sent = command;
+        if send_state.time_since_send.is_finished() || input_changed {
+            send_state.time_since_send.reset();
+        }
+    }
+}
 
 fn attach_sprite_to_replicated_entities(
     mut commands: Commands,
+    asset_server: Res<AssetServer>,
     q: Query<
         Entity,
         (
@@ -91,14 +238,17 @@ fn attach_sprite_to_replicated_entities(
         ),
     >,
 ) {
+    let texture = asset_server.load("cat.png");
+
     for e in &q {
         commands.entity(e).insert((
             NetEntityVisual,
             Sprite {
-                color: Color::srgb(1.0, 0.1, 0.1),
-                custom_size: Some(Vec2::new(12.0, 12.0)),
+                image: texture.clone(),
+                custom_size: Some(Vec2::new(8.0, 8.0)),
                 ..Default::default()
             },
+            Transform::from_scale(Vec3::splat(SPRITE_SCALE)),
         ));
     }
 }
@@ -109,6 +259,64 @@ fn sync_visual_transform_from_net(
     for (nt, mut t) in &mut q {
         t.translation.x = nt.x;
         t.translation.y = nt.y;
+    }
+}
+
+fn tag_local_player(
+    local_client: Res<LocalClientId>,
+    mut commands: Commands,
+    q: Query<(Entity, &Player), (With<Replicated>, Without<LocalPlayer>)>,
+) {
+    for (entity, player) in &q {
+        if player.network_id == local_client.0 {
+            commands.entity(entity).insert(LocalPlayer);
+        }
+    }
+}
+
+// Keep the camera centered on the local player.
+fn update_camera_follow(
+    mut q_camera: Query<&mut Transform, (With<FollowCamera>, Without<LocalPlayer>)>,
+    q_player: Query<&Transform, (With<LocalPlayer>, Without<FollowCamera>)>,
+) {
+    let Ok(player_transform) = q_player.single() else {
+        return;
+    };
+    for mut camera_transform in &mut q_camera {
+        camera_transform.translation.x = player_transform.translation.x;
+        camera_transform.translation.y = player_transform.translation.y;
+    }
+}
+
+fn update_camera_viewport(
+    windows: Query<&Window>,
+    virtual_resolution: Res<CameraVirtualResolution>,
+    mut cameras: Query<&mut Camera, With<FollowCamera>>,
+) {
+    let Ok(window) = windows.single() else {
+        return;
+    };
+
+    let width = window.resolution.physical_width();
+    let height = window.resolution.physical_height();
+    let scale_x = width as f32 / virtual_resolution.width;
+    let scale_y = height as f32 / virtual_resolution.height;
+    let scale = scale_x.min(scale_y).floor().max(1.0) as u32;
+
+    let viewport_width = (virtual_resolution.width as u32).saturating_mul(scale);
+    let viewport_height = (virtual_resolution.height as u32).saturating_mul(scale);
+    let viewport_x = width.saturating_sub(viewport_width) / 2;
+    let viewport_y = height.saturating_sub(viewport_height) / 2;
+
+    // Integer scaling + centered viewport keeps pixels crisp on any screen.
+    // The resulting letterbox ensures we never render at a fractional scale.
+
+    for mut camera in &mut cameras {
+        camera.viewport = Some(Viewport {
+            physical_position: UVec2::new(viewport_x, viewport_y),
+            physical_size: UVec2::new(viewport_width, viewport_height),
+            depth: 0.0..1.0,
+        });
     }
 }
 
