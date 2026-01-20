@@ -9,3 +9,6 @@ bevy.workspace = true
 bevy_replicon.workspace = true
 serde.workspace = true
 anyhow.workspace = true
+
+[lints.clippy]
+type_complexity = "allow"
