@@ -4,23 +4,123 @@ on:
   pull_request:
 
 jobs:
-  build:
+  changes:
+    runs-on: windows-latest
+    outputs:
+      has_changes: ${{ steps.crates.outputs.has_changes }}
+      crate_args: ${{ steps.crates.outputs.crate_args }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            workspace:
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain'
+              - 'rust-toolchain.toml'
+              - '.cargo/**'
+              - '.github/workflows/**'
+              - 'rustfmt.toml'
+              - 'clippy.toml'
+              - '.clippy.toml'
+            core:
+              - 'crates/core/**'
+            client:
+              - 'crates/client/**'
+            server:
+              - 'crates/server/**'
+            modkit:
+              - 'crates/modkit/**'
+      - name: Compute crates
+        id: crates
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          add() {
+            local name="$1"
+            for existing in "${crates[@]}"; do
+              if [[ "$existing" == "$name" ]]; then
+                return
+              fi
+            done
+            crates+=("$name")
+          }
+
+          crates=()
+          if [[ "${{ steps.filter.outputs.workspace }}" == "true" ]]; then
+            crates=(core client server modkit)
+          else
+            if [[ "${{ steps.filter.outputs.core }}" == "true" ]]; then
+              add core
+              add client
+              add server
+            fi
+            if [[ "${{ steps.filter.outputs.client }}" == "true" ]]; then
+              add client
+            fi
+            if [[ "${{ steps.filter.outputs.server }}" == "true" ]]; then
+              add server
+            fi
+            if [[ "${{ steps.filter.outputs.modkit }}" == "true" ]]; then
+              add modkit
+            fi
+          fi
+
+          if [[ "${#crates[@]}" -gt 0 ]]; then
+            args=()
+            for crate in "${crates[@]}"; do
+              args+=("-p" "$crate")
+            done
+            echo "has_changes=true" >> "$GITHUB_OUTPUT"
+            echo "crate_args=${args[*]}" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_changes=false" >> "$GITHUB_OUTPUT"
+            echo "crate_args=" >> "$GITHUB_OUTPUT"
+          fi
+
+  fmt:
+    needs: changes
+    if: needs.changes.outputs.has_changes == 'true'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
-
       - uses: dtolnay/rust-toolchain@stable
         with:
-          components: rustfmt, clippy
-
+          components: rustfmt
       - name: Cargo fmt
-        run: cargo fmt --all -- --check
+        run: cargo fmt ${{ needs.changes.outputs.crate_args }} -- --check
 
+  clippy:
+    needs: changes
+    if: needs.changes.outputs.has_changes == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
       - name: Cargo clippy
-        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+        run: cargo clippy ${{ needs.changes.outputs.crate_args }} --all-targets --all-features -- -D warnings
 
+  build:
+    needs: changes
+    if: needs.changes.outputs.has_changes == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
       - name: Cargo build
-        run: cargo build --workspace --all-features
+        run: cargo build ${{ needs.changes.outputs.crate_args }} --all-features
 
+  test:
+    needs: changes
+    if: needs.changes.outputs.has_changes == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
       - name: Cargo test
-        run: cargo test --workspace --all-features
+        run: cargo test ${{ needs.changes.outputs.crate_args }} --all-features
